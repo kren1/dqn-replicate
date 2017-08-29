@@ -21,7 +21,6 @@ def buildDQN(action_num=4):
 
 def saveScreenShot(screenshot):
     for i in range(len(screenshot)):
-      print(screenshot[i].shape)
       im = Image.fromarray(screenshot[:,:,i])
       im.save("file" + str(i) + ".jpg")
 
@@ -34,7 +33,8 @@ def performAction(ale, action):
     reward += [ale.act(action)] 
     #screenshot += [ale.getScreenGrayscale()]
     screenshot += [scipy.misc.imresize(ale.getScreenGrayscale()[:,:,0], (110,84))[18:102,:]]
-  screenshot = np.array(screenshot).swapaxes(0,2)
+  screenshot = np.array(screenshot).swapaxes(0,2).swapaxes(0,1)
+  print(screenshot.shape)
   saveScreenShot(screenshot)
   print(reward)
 
