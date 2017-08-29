@@ -9,7 +9,7 @@ import scipy.misc
 import random
 from datetime import datetime
 
-replay_memory_capacity = 20000
+replay_memory_capacity = 200
 minibatch_size = 32
 
 def buildDQN(action_num=4, reuse=False):
@@ -87,10 +87,14 @@ yj = is_terminal*rj + (1 - is_terminal)*(rj + gamma*tf.reduce_max(Qj1))
 loss = tf.nn.l2_loss(tf.tile(tf.reshape(yj, [-1,1]),[1, 6]) - Qj)
 tf.summary.scalar('loss',loss)
 
-optimizer = tf.train.RMSPropOptimizer(0.001)
+optimizer = tf.train.RMSPropOptimizer(0.01)
 train_step = optimizer.minimize(loss)
 
 minibatch = D[np.random.choice(replay_memory_capacity,minibatch_size, replace=False)]
+
+control_states = D[np.random.choice(replay_memory_capacity,50, replace=False)]
+control_states = np.array(list(control_states[:,0]))
+
 feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
 						    Qj1_inpt: np.array( list(minibatch[:,3])), 
 						    rj: minibatch[:,2].astype(np.float32) , 
@@ -114,18 +118,14 @@ t_writer.add_graph(sess.graph)
 M = 1000
 epsilon = 0.9
 i = 0
-total_reward = 0
+total_reward, T = 0, 0
 for episode in range(M):
   st, _ , _ = performAction(ale, 0)
   los = sess.run(loss, feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
    					    Qj1_inpt: np.array( list(minibatch[:,3])), 
    					    rj: minibatch[:,2].astype(np.float32) , 
                                                 is_terminal: minibatch[:,4].astype(np.float32)})
-  print(str(episode) + "  loss: "  + str(los) + "  total reward: " + str(total_reward))
-  total_rew_summary = tf.Summary(value=[tf.Summary.Value(tag="total_reward", simple_value=total_reward)])
-  t_writer.add_summary(total_rew_summary, i)
-  T = 0
-  epsilon = epsilon - 0.02 if epsilon > 0.11 else 0.1
+  print(str(episode) + "  loss: "  + str(los))
   print(epsilon)
   while not ale.game_over():
     if random.random() < epsilon:
@@ -147,12 +147,22 @@ for episode in range(M):
 						    rj: minibatch[:,2].astype(np.float32) , 
                                                     is_terminal: minibatch[:,4].astype(np.float32)})
 
-    #print("loss: " + str(los))
+    if T % 50 == 0:
+      q_vals = sess.run(network, feed_dict={inpt: control_states})
+      q_val_metric = q_vals.max(axis=1).mean()
+      q_val_summary = tf.Summary(value=[tf.Summary.Value(tag="Q Value metric", simple_value=q_val_metric)])
+      t_writer.add_summary(q_val_summary, i)
+
     i += 1
     t_writer.add_summary(summ, i)
     T += 1
 
-
+  print("T is: " + str(T))
+  total_rew_summary = tf.Summary(value=[tf.Summary.Value(tag="total_reward", simple_value=total_reward)])
+  t_writer.add_summary(total_rew_summary, i)
+  print("total reward: " + str(total_reward))
+  T, total_reward = 0, 0
+  epsilon = epsilon - 0.02 if epsilon > 0.11 else 0.1
   ale.reset_game() 
 
 
