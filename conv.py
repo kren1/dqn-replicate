@@ -34,9 +34,10 @@ def performAction(ale, action):
     #screenshot += [ale.getScreenGrayscale()]
     screenshot += [scipy.misc.imresize(ale.getScreenGrayscale()[:,:,0], (110,84))[18:102,:]]
   screenshot = np.array(screenshot).swapaxes(0,2).swapaxes(0,1)
-  print(screenshot.shape)
-  saveScreenShot(screenshot)
-  print(reward)
+#  print(screenshot.shape)
+#  saveScreenShot(screenshot)
+#  print(reward)
+  return screenshot, np.sign(sum(reward))
 
 ins = np.random.rand(10,84,84,4)
 network, inpt = buildDQN()
