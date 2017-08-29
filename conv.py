@@ -7,17 +7,18 @@ from PIL import Image
 from random import randrange
 import scipy.misc
 import random
+from datetime import datetime
 
-replay_memory_capacity = 1000
+replay_memory_capacity = 20000
 minibatch_size = 32
 
 def buildDQN(action_num=4, reuse=False):
   with tf.variable_scope('Deep-Q-Net', reuse=reuse):
     inpt = tf.placeholder(tf.float32, shape=(None,84,84,4), name="input_layer")
     conv1 = tf.layers.conv2d(inputs=inpt, filters=16, kernel_size=[8,8], strides=4, reuse=reuse, activation=tf.nn.relu, name="Conv1_8x8")
-    conv2 = tf.layers.conv2d(inputs=conv1, filters=32, kernel_size=[4,4], strides=2, activation=tf.nn.relu, name="Conv2_4x4")
+    conv2 = tf.layers.conv2d(inputs=conv1, filters=32, kernel_size=[4,4], strides=2, activation=tf.nn.relu, reuse=reuse,name="Conv2_4x4")
     conv2_r = tf.reshape(conv2, [-1, 9*9*32])
-    dense = tf.layers.dense(inputs=conv2_r, units=256, activation=tf.nn.relu, name="dense")
+    dense = tf.layers.dense(inputs=conv2_r, units=256, activation=tf.nn.relu, name="dense", reuse=reuse)
     
     linear_W = tf.get_variable("linear_layer", [256, action_num], tf.float32, tf.random_normal_initializer)
     outpt = tf.matmul(dense, linear_W)
@@ -44,7 +45,7 @@ def performAction(ale, action):
 #  print(screenshot.shape)
 #  saveScreenShot(screenshot)
 #  print(reward)
-  return screenshot, np.sign(sum(reward))
+  return screenshot, np.sign(sum(reward)), sum(reward)
 
 def random_action(legal_actions):
   return  legal_actions[randrange(len(legal_actions))]
@@ -52,12 +53,12 @@ def random_action(legal_actions):
 def init_replay_memory(ale):
   legal_actions = ale.getMinimalActionSet()
   D = []
-  prev_state, r = performAction(ale, 0)
+  prev_state, r, _ = performAction(ale, 0)
   for i in range(replay_memory_capacity):
     if ale.game_over():
       ale.reset_game()
     action = random_action(legal_actions)
-    state, r = performAction(ale, action) 
+    state, r, _ = performAction(ale, action) 
     D += [(prev_state, action, r, state, ale.game_over())]
   
   ale.reset_game()
@@ -100,7 +101,7 @@ init = tf.global_variables_initializer()
 sess.run(init)
 ##tensorboard
 merged = tf.summary.merge_all()
-t_writer = tf.summary.FileWriter("/tmp/test")
+t_writer = tf.summary.FileWriter("/tmp/test/" + str(datetime.now())[5:16])
 t_writer.add_graph(sess.graph)
 
 #code.interact(local=locals())
@@ -110,17 +111,22 @@ t_writer.add_graph(sess.graph)
 
 
 
-M = 10
-epsilon = 0.4
+M = 1000
+epsilon = 0.9
 i = 0
+total_reward = 0
 for episode in range(M):
-  st, _ = performAction(ale, 0)
+  st, _ , _ = performAction(ale, 0)
   los = sess.run(loss, feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
    					    Qj1_inpt: np.array( list(minibatch[:,3])), 
    					    rj: minibatch[:,2].astype(np.float32) , 
                                                 is_terminal: minibatch[:,4].astype(np.float32)})
-  print(str(episode) + "  loss: "  + str(los))
+  print(str(episode) + "  loss: "  + str(los) + "  total reward: " + str(total_reward))
+  total_rew_summary = tf.Summary(value=[tf.Summary.Value(tag="total_reward", simple_value=total_reward)])
+  t_writer.add_summary(total_rew_summary, i)
   T = 0
+  epsilon = epsilon - 0.02 if epsilon > 0.11 else 0.1
+  print(epsilon)
   while not ale.game_over():
     if random.random() < epsilon:
       action = random_action(legal_actions)
@@ -128,7 +134,8 @@ for episode in range(M):
       result = sess.run(network, feed_dict={inpt: [st]})
 #      import pdb; pdb.set_trace()
       action = legal_actions[np.argmax(result)]
-    st1, r = performAction(ale, action) 
+    st1, r, rew = performAction(ale, action) 
+    total_reward += rew
     D[randrange(replay_memory_capacity)] = (st, action, r, st1, ale.game_over()) 
     minibatch = D[np.random.choice(replay_memory_capacity,minibatch_size, replace=False)]
     st = st1
