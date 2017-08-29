@@ -8,7 +8,7 @@ from random import randrange
 import scipy.misc
 import random
 
-replay_memory_capacity = 10000
+replay_memory_capacity = 1000
 minibatch_size = 32
 
 def buildDQN(action_num=4, reuse=False):
@@ -22,7 +22,8 @@ def buildDQN(action_num=4, reuse=False):
     linear_W = tf.get_variable("linear_layer", [256, action_num], tf.float32, tf.random_normal_initializer)
     outpt = tf.matmul(dense, linear_W)
     if not reuse:
-      tf.summary.image("minibatch", inpt)
+      #tf.summary.image("minibatch", inpt)
+      pass
   return outpt, inpt
 
 
@@ -85,11 +86,14 @@ yj = is_terminal*rj + (1 - is_terminal)*(rj + gamma*tf.reduce_max(Qj1))
 loss = tf.nn.l2_loss(tf.tile(tf.reshape(yj, [-1,1]),[1, 6]) - Qj)
 tf.summary.scalar('loss',loss)
 
-optimizer = tf.train.GradientDescentOptimizer(0.01)
+optimizer = tf.train.RMSPropOptimizer(0.001)
 train_step = optimizer.minimize(loss)
 
 minibatch = D[np.random.choice(replay_memory_capacity,minibatch_size, replace=False)]
-
+feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
+						    Qj1_inpt: np.array( list(minibatch[:,3])), 
+						    rj: minibatch[:,2].astype(np.float32) , 
+                                                    is_terminal: minibatch[:,4].astype(np.float32)}
 
 sess = tf.Session()
 init = tf.global_variables_initializer()
@@ -99,7 +103,7 @@ merged = tf.summary.merge_all()
 t_writer = tf.summary.FileWriter("/tmp/test")
 t_writer.add_graph(sess.graph)
 
-code.interact(local=locals())
+#code.interact(local=locals())
 #re = sess.run(network, feed_dict={inpt:list(minibatch[:,0])})
 #re1 = sess.run(Qj1, feed_dict={Q:list(minibatch[:,0])})
 #print(re)
@@ -108,11 +112,15 @@ code.interact(local=locals())
 
 M = 10
 epsilon = 0.4
-
+i = 0
 for episode in range(M):
   st, _ = performAction(ale, 0)
+  los = sess.run(loss, feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
+   					    Qj1_inpt: np.array( list(minibatch[:,3])), 
+   					    rj: minibatch[:,2].astype(np.float32) , 
+                                                is_terminal: minibatch[:,4].astype(np.float32)})
+  print(str(episode) + "  loss: "  + str(los))
   T = 0
-  print(episode)
   while not ale.game_over():
     if random.random() < epsilon:
       action = random_action(legal_actions)
@@ -124,11 +132,17 @@ for episode in range(M):
     D[randrange(replay_memory_capacity)] = (st, action, r, st1, ale.game_over()) 
     minibatch = D[np.random.choice(replay_memory_capacity,minibatch_size, replace=False)]
     st = st1
+
+
+#
     summ, _ = sess.run([merged, train_step], feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
 						    Qj1_inpt: np.array( list(minibatch[:,3])), 
 						    rj: minibatch[:,2].astype(np.float32) , 
                                                     is_terminal: minibatch[:,4].astype(np.float32)})
-    t_writer.add_summary(summ, T)
+
+    #print("loss: " + str(los))
+    i += 1
+    t_writer.add_summary(summ, i)
     T += 1
 
 
