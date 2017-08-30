@@ -64,7 +64,8 @@ def init_replay_memory(ale):
   ale.reset_game()
   return np.array(D)
       
-
+def action_to_index(actions, legal_actions):
+  return np.array(list(map(lambda a: [1, np.where(a == legal_actions)[0][0]], actions)))
 
 
 ale = ALEInterface()
@@ -81,11 +82,14 @@ Qj1, Qj1_inpt = buildDQN(len(legal_actions), reuse=True)
 
 rj = tf.placeholder(tf.float32, shape=(None), name="rj")
 is_terminal = tf.placeholder(tf.float32, shape=(None), name="is_terminal")
+acti = tf.placeholder(tf.int32, shape=(None), name="action")
 gamma = tf.constant(0.1)
 
-yj = is_terminal*rj + (1 - is_terminal)*(rj + gamma*tf.reduce_max(Qj1))
-loss = tf.nn.l2_loss(tf.tile(tf.reshape(yj, [-1,1]),[1, 6]) - Qj)
-tf.summary.scalar('loss',loss)
+with tf.name_scope("loss"):
+  yj = is_terminal*rj + (1 - is_terminal)*(rj + gamma*tf.reduce_max(Qj1))
+  #loss = tf.nn.l2_loss(tf.tile(tf.reshape(yj, [-1,1]),[1, 6]) - Qj)
+  loss = tf.reduce_sum(tf.square(tf.subtract(yj,tf.gather_nd(Qj,acti))))
+  tf.summary.scalar('loss',loss)
 
 optimizer = tf.train.RMSPropOptimizer(0.01)
 train_step = optimizer.minimize(loss)
@@ -96,6 +100,7 @@ control_states = D[np.random.choice(replay_memory_capacity,50, replace=False)]
 control_states = np.array(list(control_states[:,0]))
 
 feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
+                                                    acti: action_to_index(minibatch[:,1], legal_actions),
 						    Qj1_inpt: np.array( list(minibatch[:,3])), 
 						    rj: minibatch[:,2].astype(np.float32) , 
                                                     is_terminal: minibatch[:,4].astype(np.float32)}
@@ -115,13 +120,14 @@ t_writer.add_graph(sess.graph)
 
 
 
-M = 1000
+M = 400
 epsilon = 0.9
 i = 0
 total_reward, T = 0, 0
 for episode in range(M):
   st, _ , _ = performAction(ale, 0)
   los = sess.run(loss, feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
+                                            acti: action_to_index(minibatch[:,1], legal_actions),
    					    Qj1_inpt: np.array( list(minibatch[:,3])), 
    					    rj: minibatch[:,2].astype(np.float32) , 
                                                 is_terminal: minibatch[:,4].astype(np.float32)})
@@ -139,19 +145,18 @@ for episode in range(M):
     D[randrange(replay_memory_capacity)] = (st, action, r, st1, ale.game_over()) 
     minibatch = D[np.random.choice(replay_memory_capacity,minibatch_size, replace=False)]
     st = st1
-
-
-#
     summ, _ = sess.run([merged, train_step], feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
+                                                    acti: action_to_index(minibatch[:,1], legal_actions),
 						    Qj1_inpt: np.array( list(minibatch[:,3])), 
 						    rj: minibatch[:,2].astype(np.float32) , 
                                                     is_terminal: minibatch[:,4].astype(np.float32)})
 
-    if T % 50 == 0:
+    if T % 50 == 0 and i > 500:
       q_vals = sess.run(network, feed_dict={inpt: control_states})
       q_val_metric = q_vals.max(axis=1).mean()
       q_val_summary = tf.Summary(value=[tf.Summary.Value(tag="Q Value metric", simple_value=q_val_metric)])
       t_writer.add_summary(q_val_summary, i)
+#      print(q_vals[8])
 
     i += 1
     t_writer.add_summary(summ, i)
@@ -162,34 +167,10 @@ for episode in range(M):
   t_writer.add_summary(total_rew_summary, i)
   print("total reward: " + str(total_reward))
   T, total_reward = 0, 0
-  epsilon = epsilon - 0.02 if epsilon > 0.11 else 0.1
+  epsilon = epsilon - 0.008 if epsilon > 0.11 else 0.1
   ale.reset_game() 
 
 
 code.interact(local=locals())
 performAction(ale, legal_actions[1])
-
-#code.interact(local=locals())
-
-
-#optimizer = tf.train.GradientDescentOptimizer(0.001)
-#
-#target = tf.constant([0.3,-0.4,0.2,-0.5])
-#loss = tf.nn.l2_loss(target - network)
-#tf.summary.scalar('loss',loss)
-#train_step = optimizer.minimize(loss)
-#
-##tensorboard
-#merged = tf.summary.merge_all()
-#t_writer = tf.summary.FileWriter("/tmp/test")
-#
-#sess = tf.Session()
-#init = tf.global_variables_initializer()
-#sess.run(init)
-#
-#for i in range(10):
-#  summ, _ = sess.run([merged, train_step], feed_dict={inpt: ins})
-#  t_writer.add_summary(summ,i)
-#  result = sess.run(network, feed_dict={inpt: ins})
-#  print(result)
 #code.interact(local=locals())
