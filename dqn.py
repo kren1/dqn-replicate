@@ -4,12 +4,13 @@ import numpy as np
 import code
 from ale_python_interface import ALEInterface
 from PIL import Image
-from random import randrange
 import scipy.misc
+from random import randrange
 import random
 from datetime import datetime
+from ReplayMemory import ReplayMemory
 
-replay_memory_capacity = 1000
+replay_memory_capacity = 80000
 minibatch_size = 32
 
 def buildDQN(action_num=4, reuse=False):
@@ -20,8 +21,9 @@ def buildDQN(action_num=4, reuse=False):
     conv2_r = tf.reshape(conv2, [-1, 9*9*32])
     dense = tf.layers.dense(inputs=conv2_r, units=256, activation=tf.nn.relu, name="dense", reuse=reuse)
     
-    linear_W = tf.get_variable("linear_layer", [256, action_num], tf.float32, tf.random_normal_initializer)
-    outpt = tf.matmul(dense, linear_W)
+    linear_W = tf.get_variable("linear_layer_weights", [256, action_num], tf.float32, tf.random_normal_initializer)
+    linear_B = tf.get_variable("linear_layer_biases", [action_num], tf.float32, tf.random_normal_initializer)
+    outpt = tf.matmul(dense, linear_W) + linear_B
     if not reuse:
       #tf.summary.image("minibatch", inpt)
       pass
@@ -50,19 +52,17 @@ def performAction(ale, action):
 def random_action(legal_actions):
   return  legal_actions[randrange(len(legal_actions))]
 
-def init_replay_memory(ale):
+def init_replay_memory(ale, D):
   legal_actions = ale.getMinimalActionSet()
-  D = []
   prev_state, r, _ = performAction(ale, 0)
-  for i in range(replay_memory_capacity):
+  for i in range(10000):
     if ale.game_over():
       ale.reset_game()
     action = random_action(legal_actions)
     state, r, _ = performAction(ale, action) 
-    D += [(prev_state, action, r, state, ale.game_over())]
+    D.add(prev_state, action, r, state)
   
   ale.reset_game()
-  return np.array(D)
       
 def action_to_index(actions, legal_actions):
   return np.array(list(map(lambda a: [1, np.where(a == legal_actions)[0][0]], actions)))
@@ -70,93 +70,69 @@ def action_to_index(actions, legal_actions):
 
 ale = ALEInterface()
 ale.setInt(b'random_seed', 123)
-#ale.loadROM(str.encode("/home/tim/space_invaders.bin"))
+ale.loadROM(str.encode("/home/tim/space_invaders.bin"))
 #ale.loadROM(str.encode("/home/tim/breakout.bin"))
-ale.loadROM(str.encode("/home/tim/Seaquest.A26"))
-
+#ale.loadROM(str.encode("/home/tim/Seaquest.A26"))
 legal_actions = ale.getMinimalActionSet()
 
-D = init_replay_memory(ale)
+D = ReplayMemory(replay_memory_capacity)
+init_replay_memory(ale, D)
 
-network, inpt = buildDQN(len(legal_actions))
-Qj, Qj_inpt = network, inpt
-Qj1, Qj1_inpt = buildDQN(len(legal_actions), reuse=True)
+Qj, Qj_inpt = buildDQN(len(legal_actions))
+Qj_hat, Qj_hat_inpt = Qj, Qj_inpt
 
-rj = tf.placeholder(tf.float32, shape=(None), name="rj")
-is_terminal = tf.placeholder(tf.float32, shape=(None), name="is_terminal")
+yj = tf.placeholder(tf.float32, shape=(None), name="yj")
 acti = tf.placeholder(tf.int32, shape=(None), name="action")
-gamma = tf.constant(0.1)
 
 with tf.name_scope("loss"):
-  yj = is_terminal*rj + (1 - is_terminal)*(rj + gamma*tf.reduce_max(Qj1))
-  #loss = tf.nn.l2_loss(tf.tile(tf.reshape(yj, [-1,1]),[1, 6]) - Qj)
-  loss = tf.reduce_mean(tf.square(tf.subtract(yj,tf.gather_nd(Qj,acti))))
+  loss = tf.reduce_mean(tf.square(tf.clip_by_value(tf.subtract(yj,tf.gather_nd(Qj,acti)), -1, 1)))
   tf.summary.scalar('loss',loss)
 
 optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99,0.0, 1e-6)
 train_step = optimizer.minimize(loss)
 
-minibatch = D[np.random.choice(replay_memory_capacity,minibatch_size, replace=False)]
 
-control_states = D[np.random.choice(replay_memory_capacity,200, replace=False)]
-control_states = np.array(list(control_states[:,0]))
-
-feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
-                                                    acti: action_to_index(minibatch[:,1], legal_actions),
-						    Qj1_inpt: np.array( list(minibatch[:,3])), 
-						    rj: minibatch[:,2].astype(np.float32) , 
-                                                    is_terminal: minibatch[:,4].astype(np.float32)}
+control_states = D.random_minibatch(200)[0]
 
 sess = tf.Session()
 init = tf.global_variables_initializer()
 sess.run(init)
-code.interact(local=locals())
+
 ##tensorboard
 merged = tf.summary.merge_all()
-t_writer = tf.summary.FileWriter("/tmp/test/" + str(datetime.now())[5:16])
+t_writer = tf.summary.FileWriter("/tmp/test1/" + str(datetime.now())[5:16])
 t_writer.add_graph(sess.graph)
 saver = tf.train.Saver()
 
 #code.interact(local=locals())
-#re = sess.run(network, feed_dict={inpt:list(minibatch[:,0])})
-#re1 = sess.run(Qj1, feed_dict={Q:list(minibatch[:,0])})
-#print(re)
-
+#import pdb; pdb.set_trace()
 
 
 M = 600
 epsilon = 0.9
-i = 0
-total_reward, T, q_val_metric = 0, 0, 0
+gamma = 0.99
+i, total_reward, T, q_val_metric = 0, 0, 0, 0
 for episode in range(M):
   st, _ , _ = performAction(ale, 0)
-  los = sess.run(loss, feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
-                                            acti: action_to_index(minibatch[:,1], legal_actions),
-   					    Qj1_inpt: np.array( list(minibatch[:,3])), 
-   					    rj: minibatch[:,2].astype(np.float32) , 
-                                                is_terminal: minibatch[:,4].astype(np.float32)})
-  print(str(episode) + "  loss: "  + str(los))
-  print(epsilon)
+  print(str(episode) + "  epsilon: "  + str(epsilon))
   while not ale.game_over():
     if random.random() < epsilon:
       action = random_action(legal_actions)
     else:
-      result = sess.run(network, feed_dict={inpt: [st]})
-#      import pdb; pdb.set_trace()
+      result = sess.run(Qj, feed_dict={Qj_inpt: [st]})
       action = legal_actions[np.argmax(result)]
     st1, r, rew = performAction(ale, action) 
     total_reward += rew
-    D[randrange(replay_memory_capacity)] = (st, action, r, st1, ale.game_over()) 
-    minibatch = D[np.random.choice(replay_memory_capacity,minibatch_size, replace=False)]
+    D.add(st, action, r, st1) 
+    Qjs, ajs, rjs, Qj1s  = D.random_minibatch(minibatch_size)
+    yjs = rjs
+    if not ale.game_over():
+      yjs = yjs + gamma*np.amax(sess.run(Qj_hat, feed_dict={Qj_hat_inpt: Qj1s}), axis=1)
     st = st1
-    summ, _ = sess.run([merged, train_step], feed_dict={Qj_inpt: np.array( list(minibatch[:,0])), 
-                                                    acti: action_to_index(minibatch[:,1], legal_actions),
-						    Qj1_inpt: np.array( list(minibatch[:,3])), 
-						    rj: minibatch[:,2].astype(np.float32) , 
-                                                    is_terminal: minibatch[:,4].astype(np.float32)})
+    summ, _ = sess.run([merged, train_step], feed_dict={Qj_inpt: Qjs, yj: yjs, acti: action_to_index(ajs, legal_actions)})
 
     if T % 50 == 0 and i > 500:
-      q_vals = sess.run(network, feed_dict={inpt: control_states})
+      q_vals = sess.run(Qj, feed_dict={Qj_inpt: control_states})
       q_val_metric = q_vals.max(axis=1).mean()
       q_val_summary = tf.Summary(value=[tf.Summary.Value(tag="Q Value metric", simple_value=q_val_metric)])
       t_writer.add_summary(q_val_summary, i)
