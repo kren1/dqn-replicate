@@ -15,15 +15,15 @@ minibatch_size = 32
 
 def buildDQN(action_num=4, reuse=False):
   with tf.variable_scope('Deep-Q-Net', reuse=reuse):
+    regularizer = tf.contrib.layers.l2_regularizer(scale=0.01)
     inpt = tf.placeholder(tf.float32, shape=(None,84,84,4), name="input_layer")
     conv1 = tf.layers.conv2d(inputs=inpt, filters=16, kernel_size=[8,8], strides=4, reuse=reuse, activation=tf.nn.relu, name="Conv1_8x8")
     conv2 = tf.layers.conv2d(inputs=conv1, filters=32, kernel_size=[4,4], strides=2, activation=tf.nn.relu, reuse=reuse,name="Conv2_4x4")
     conv2_r = tf.reshape(conv2, [-1, 9*9*32])
-    dense = tf.layers.dense(inputs=conv2_r, units=256, activation=tf.nn.relu, name="dense", reuse=reuse)
+    dense = tf.layers.dense(inputs=conv2_r, units=256, activation=tf.nn.relu, kernel_regularizer=regularizer, name="dense", reuse=reuse)
     
-    linear_W = tf.get_variable("linear_layer_weights", [256, action_num], tf.float32, tf.random_normal_initializer)
-    linear_B = tf.get_variable("linear_layer_biases", [action_num], tf.float32, tf.random_normal_initializer)
-    outpt = tf.matmul(dense, linear_W) + linear_B
+    linear_W = tf.get_variable("linear_layer_weights", [256, action_num], tf.float32, tf.random_normal_initializer, regularizer=regularizer)
+    outpt = tf.matmul(dense, linear_W)
     if not reuse:
       #tf.summary.image("minibatch", inpt)
       pass
@@ -79,13 +79,13 @@ D = ReplayMemory(replay_memory_capacity)
 init_replay_memory(ale, D)
 
 Qj, Qj_inpt = buildDQN(len(legal_actions))
-Qj_hat, Qj_hat_inpt = Qj, Qj_inpt
 
 yj = tf.placeholder(tf.float32, shape=(None), name="yj")
 acti = tf.placeholder(tf.int32, shape=(None), name="action")
 
 with tf.name_scope("loss"):
-  loss = tf.reduce_mean(tf.square(tf.clip_by_value(tf.subtract(yj,tf.gather_nd(Qj,acti)), -1, 1)))
+  loss = tf.reduce_mean(tf.square(tf.subtract(yj,tf.gather_nd(Qj,acti))))
+  #loss = tf.reduce_mean(tf.square(tf.clip_by_value(tf.subtract(yj,tf.gather_nd(Qj,acti)), -1, 1)))
   tf.summary.scalar('loss',loss)
 
 optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99,0.0, 1e-6)
@@ -95,6 +95,7 @@ train_step = optimizer.minimize(loss)
 control_states = D.random_minibatch(200)[0]
 
 sess = tf.Session()
+sess_hat = tf.Session()
 init = tf.global_variables_initializer()
 sess.run(init)
 
@@ -103,6 +104,7 @@ merged = tf.summary.merge_all()
 t_writer = tf.summary.FileWriter("/tmp/test1/" + str(datetime.now())[5:16])
 t_writer.add_graph(sess.graph)
 saver = tf.train.Saver()
+
 
 #code.interact(local=locals())
 #import pdb; pdb.set_trace()
@@ -116,6 +118,10 @@ for episode in range(M):
   st, _ , _ = performAction(ale, 0)
   print(str(episode) + "  epsilon: "  + str(epsilon))
   while not ale.game_over():
+    if i % 1000 == 0:
+      print("Switching over variables")
+      saver.save(sess, "hat_vars.ckpt")
+      saver.restore(sess_hat, "hat_vars.ckpt")
     if random.random() < epsilon:
       action = random_action(legal_actions)
     else:
@@ -127,7 +133,7 @@ for episode in range(M):
     Qjs, ajs, rjs, Qj1s  = D.random_minibatch(minibatch_size)
     yjs = rjs
     if not ale.game_over():
-      yjs = yjs + gamma*np.amax(sess.run(Qj_hat, feed_dict={Qj_hat_inpt: Qj1s}), axis=1)
+      yjs = yjs + gamma*np.amax(sess_hat.run(Qj, feed_dict={Qj_inpt: Qj1s}), axis=1)
     st = st1
     summ, _ = sess.run([merged, train_step], feed_dict={Qj_inpt: Qjs, yj: yjs, acti: action_to_index(ajs, legal_actions)})
 
