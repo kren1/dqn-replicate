@@ -10,7 +10,7 @@ import random
 from datetime import datetime
 from ReplayMemory import ReplayMemory
 
-replay_memory_capacity = 80000
+replay_memory_capacity = 180000
 minibatch_size = 32
 
 def buildDQN(action_num=4, reuse=False):
@@ -22,10 +22,12 @@ def buildDQN(action_num=4, reuse=False):
     conv2_r = tf.reshape(conv2, [-1, 9*9*32])
     dense = tf.layers.dense(inputs=conv2_r, units=256, activation=tf.nn.relu, kernel_regularizer=regularizer, name="dense", reuse=reuse)
     
-    linear_W = tf.get_variable("linear_layer_weights", [256, action_num], tf.float32, tf.random_normal_initializer, regularizer=regularizer)
+    linear_W = tf.get_variable("linear_layer_weights", [256, action_num], tf.float32, tf.truncated_normal_initializer, regularizer=regularizer)
     outpt = tf.matmul(dense, linear_W)
+    tf.summary.histogram("dqn_output", outpt)
     if not reuse:
-      #tf.summary.image("minibatch", inpt)
+#      tf.summary.image("minibatchi_sample_1", tf.slice(inpt, [0,0,0,0],[1,-1,-1,1]))
+#      tf.summary.image("minibatchi_sample_2", tf.slice(inpt, [0,0,0,2],[1,-1,-1,1]))
       pass
   return outpt, inpt
 
@@ -39,7 +41,10 @@ def performAction(ale, action):
   reward = []
   screenshot = []
   legal_actions = ale.getMinimalActionSet()
+  lives_before = ale.lives()
   for i in range(1,5):
+    reward += [ale.act(action)] 
+    reward += [ale.act(action)] 
     reward += [ale.act(action)] 
     #screenshot += [ale.getScreenGrayscale()]
     screenshot += [scipy.misc.imresize(ale.getScreenGrayscale()[:,:,0], (110,84))[18:102,:]]
@@ -47,7 +52,7 @@ def performAction(ale, action):
 #  print(screenshot.shape)
 #  saveScreenShot(screenshot)
 #  print(reward)
-  return screenshot, np.sign(sum(reward)), sum(reward)
+  return screenshot, np.sign(sum(reward)) + np.sign(ale.lives() - lives_before), sum(reward)
 
 def random_action(legal_actions):
   return  legal_actions[randrange(len(legal_actions))]
@@ -55,9 +60,10 @@ def random_action(legal_actions):
 def init_replay_memory(ale, D):
   legal_actions = ale.getMinimalActionSet()
   prev_state, r, _ = performAction(ale, 0)
-  for i in range(10000):
+  for i in range(20000):
     if ale.game_over():
       ale.reset_game()
+      [ale.act(0) for i in range(132)] #skip start of the game
     action = random_action(legal_actions)
     state, r, _ = performAction(ale, action) 
     D.add(prev_state, action, r, state)
@@ -70,13 +76,16 @@ def action_to_index(actions, legal_actions):
 
 ale = ALEInterface()
 ale.setInt(b'random_seed', 123)
+#ale.setBool(b'display_screen', True)
 ale.loadROM(str.encode("/home/tim/space_invaders.bin"))
 #ale.loadROM(str.encode("/home/tim/breakout.bin"))
 #ale.loadROM(str.encode("/home/tim/Seaquest.A26"))
 legal_actions = ale.getMinimalActionSet()
 
 D = ReplayMemory(replay_memory_capacity)
-init_replay_memory(ale, D)
+#init_replay_memory(ale, D)
+#D.save_data()
+D.load_data()
 
 Qj, Qj_inpt = buildDQN(len(legal_actions))
 
@@ -110,13 +119,14 @@ saver = tf.train.Saver()
 #import pdb; pdb.set_trace()
 
 
-M = 600
+M = 6000
 epsilon = 0.9
 gamma = 0.99
 i, total_reward, T, q_val_metric = 0, 0, 0, 0
 for episode in range(M):
   st, _ , _ = performAction(ale, 0)
   print(str(episode) + "  epsilon: "  + str(epsilon))
+  [ale.act(0) for i in range(132)] #skip start of the game
   while not ale.game_over():
     if i % 1000 == 0:
       print("Switching over variables")
@@ -153,7 +163,7 @@ for episode in range(M):
   t_writer.add_summary(total_rew_summary, i)
   print("total reward: " + str(total_reward))
   T, total_reward = 0, 0
-  epsilon = epsilon - 0.008 if epsilon > 0.11 else 0.1
+  epsilon = epsilon - 0.0004 if epsilon > 0.11 else 0.1
   ale.reset_game() 
 
 
