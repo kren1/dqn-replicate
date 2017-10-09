@@ -16,5 +16,13 @@ class TestNNExpr(unittest.TestCase):
   def test_idompotence(self):
     e = NNExpr("1+2+(3-4)+5-6+7+8-9")
     self.assertEqual(e.evalExpr(), NNExpr(str(e)).evalExpr())
+
+class TestHarness(unittest.TestCase):
+  def test_simple(self):
+    h = Harness(NNExpr("1+1"))
+    self.assertEqual(h.act(2, False), 1)
+
+
+
 if __name__ == '__main__':
   unittest.main(verbosity=2)

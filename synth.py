@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import numpy as np
 from random import choice
+import distance
 #Representation charcahter -> index of one hot vector
 # digits 1-9 -> 0-8
 # + -> 9 
@@ -92,16 +93,19 @@ class NNExpr:
     return eval(str(self))
 
 def generateExpressions(seed="1+1"):
-  e = NNExpr(seed)
-  h = Harness(e)
   while True:
+    e = NNExpr(seed)
+    h = Harness(e)
     i = 0
-    while h.act(choice([0,2,5])) < 1:
+    while h.act(choice([0,0,0,0,0,2,2,2,2,5]), False) < 1:
       i += 1
       if i > 20:
           i = 0
           h = Harness(NNExpr(seed))
-    yield str(e)
+    seed = str(h.nnexpr)
+    h = Harness(NNExpr(seed))
+    yield seed
+    
 
 
 
@@ -118,13 +122,15 @@ class Harness:
      }
     self.initial_expr = str(nnexpr)
     self.initial_value = nnexpr.evalExpr()
-  def act(self, action):
+  def act(self, action, equal=True):
     self.actions[action]()
     try:
-      value = nnexpr.evalExpr()
+      value = self.nnexpr.evalExpr()
     except SyntaxError:
       return -1 #Failed to compile
-    if value != self.initial_value:
+    except TypeError:
+      return -1 # eg. expression (1+1)(1+)
+    if equal and value != self.initial_value:
       return -1 #Wrong value
     return distance.levenshtein(self.initial_expr, str(self.nnexpr))
       
