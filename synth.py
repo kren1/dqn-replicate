@@ -1,30 +1,6 @@
-from antlr4 import *
-from arithmeticLexer import arithmeticLexer
-from arithmeticParser import arithmeticParser
-
-def parse(inpt):
-  lexer = arithmeticLexer(InputStream(inpt))
-  stream = CommonTokenStream(lexer)
-  parser = arithmeticParser(stream)
-  tree = parser.expression()
-  return tree, arithmeticLexer(InputStream(inpt))
-
-class Expr:
-  def __init__(self, left, right):
-   self.left = left
-   self.right = right
-class AddExpr(Expr):
-  def __str__(self):
-   return "({} + {})".format(str(self.left), str(self.right))
-class SubExpr(Expr):
-  def __str__(self):
-   return "({} - {})".format(str(self.left), str(self.right))
-
-
-onePlusTwo = AddExpr(1,2)
-
+#!/usr/bin/python3
 import numpy as np
-
+from random import choice
 #Representation charcahter -> index of one hot vector
 # digits 1-9 -> 0-8
 # + -> 9 
@@ -47,22 +23,22 @@ digitMap = [
 ")"
 ]
 
+digitLookUp = { digit: index for index, digit in enumerate(digitMap)}
+
 def find(vector):
   return np.nonzero(vector)[0][0]
 
 class NNExpr:
-  def __init__(self, size, window_size=8):
-    self.arr = np.zeros((size, 14))
-    if size % 2 == 0:
-      size += 1
-    self.arr[0,0] = 1
-    self.arr[:,2] = 1
-    for i in range(1, size, 2):
-      self.arr[i,2] = 0
-      self.arr[i,10] = 1
-    self.size = size
+  def __init__(self, expression, window_size=8):
+    expression = expression.replace(" ","")
+    self.size = len(expression) 
     self.window_left = 0
     self.window_right = window_size
+    self.cursor_pos = 0
+    self.arr = np.zeros((self.size, 14))
+    self.arr[self.cursor_pos, 0] = 1
+    for ind, c in enumerate(expression):
+      self.arr[ind, digitLookUp[c] + 1] = 1
   def cursorLeft(self):
     cursor_pos = find(self.arr[:,0])
     self.arr[cursor_pos,0] = 0
@@ -104,6 +80,8 @@ class NNExpr:
     self.arr = new_arr
     self.size += 6
   def __str__(self):
+    return "".join(list(map(lambda a: digitMap[find(a[1:])], self.arr)))
+  def print(self):
     line1 = ""  
     line2 = ""  
     for vector in self.arr[self.window_left:self.window_right]:
@@ -111,38 +89,79 @@ class NNExpr:
       line2 += "^ " if vector[0] == 1 else "  " 
     return line1 + '\n' + line2
   def evalExpr(self):
-    return eval("".join(list(map(lambda a: digitMap[find(a[1:])], self.arr))))
+    return eval(str(self))
+
+def generateExpressions(seed="1+1"):
+  e = NNExpr(seed)
+  h = Harness(e)
+  while True:
+    i = 0
+    while h.act(choice([0,2,5])) < 1:
+      i += 1
+      if i > 20:
+          i = 0
+          h = Harness(NNExpr(seed))
+    yield str(e)
+
+
+
+class Harness:
+  def __init__(self, nnexpr):
+    self.nnexpr = nnexpr
+    self.actions = {
+       0: nnexpr.cursorLeft,
+       1: nnexpr.cursorRight,
+       2: nnexpr.replace,
+       3: nnexpr.panLeft,
+       4: nnexpr.panRight,
+       5: nnexpr.insert
+     }
+    self.initial_expr = str(nnexpr)
+    self.initial_value = nnexpr.evalExpr()
+  def act(self, action):
+    self.actions[action]()
+    try:
+      value = nnexpr.evalExpr()
+    except SyntaxError:
+      return -1 #Failed to compile
+    if value != self.initial_value:
+      return -1 #Wrong value
+    return distance.levenshtein(self.initial_expr, str(self.nnexpr))
+      
+
 
 
 
 import curses
 def main(stdscr):
-  e = NNExpr(15)
+  e = NNExpr("1+1+1-2+1")
   stdscr.addstr(0,0,"Press q to quit")
-  stdscr.addstr(1,0,str(e))
+  stdscr.addstr(1,0,e.print())
   while True:
     c = stdscr.getch()
     if c == ord('q'):
       break
     elif c == curses.KEY_LEFT:
       e.cursorLeft()
-      stdscr.addstr(1,0,str(e))
+      stdscr.addstr(1,0,e.print())
     elif c == curses.KEY_RIGHT:
       e.cursorRight()
-      stdscr.addstr(1,0,str(e))
+      stdscr.addstr(1,0,e.print())
     elif c == ord('e'):
       stdscr.addstr(4,0,str(e.evalExpr()))
     elif c == ord('i'):
       e.insert()
-      stdscr.addstr(1,0,str(e))
+      stdscr.addstr(1,0,e.print())
     elif c == ord('l'):
       e.panRight()
-      stdscr.addstr(1,0,str(e))
+      stdscr.addstr(1,0,e.print())
     elif c == ord('h'):
       e.panLeft()
-      stdscr.addstr(1,0,str(e))
+      stdscr.addstr(1,0,e.print())
     elif c == ord('r'):
       e.replace()
-      stdscr.addstr(1,0,str(e))
+      stdscr.addstr(1,0,e.print())
 
-curses.wrapper(main)
+
+if __name__ == '__main__':
+   curses.wrapper(main)
