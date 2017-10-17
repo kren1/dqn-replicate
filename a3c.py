@@ -116,6 +116,8 @@ def master_thread(gradient_queue):
   pi.share_memory()
   V.share_memory()
   shared_model_state = (pi.state_dict(), V.state_dict())
+  pi_optimizer = torch.optim.RMSprop(pi.parameters(), lr=1e-3)
+  V_optimizer = torch.optim.RMSprop([p for name, p in V.named_parameters() if name.startswith('1.')], lr=1e-3)
   proc_num = 3
 #  with Pool(proc_num) as p:
 #_    p.map_async(play_game, [(i, shared_model_state, gradient_queue) for i in range(proc_num)])
@@ -127,10 +129,12 @@ def master_thread(gradient_queue):
       pi_grads, V_grads = gradient_queue.get()
       print("Updating pi grads", pi_grads[0].data[0,0,0,0])
       for pi_g, pi_param in zip(pi_grads, pi.parameters()):
-          pi_param.data += learning_rate * pi_g.data
-      print("Updating V grads")
+          #pi_param.data += learning_rate * pi_g.data
+          pi_param.grad = pi_g
+      pi_optimizer.step()
       for V_g, V_param in zip(V_grads, [p for name, p in V.named_parameters() if name.startswith('1.')]):
-          V_param.data += learning_rate * V_g.data
+          V_param.grad =  V_g
+      V_optimizer.step()
 
   
 
