@@ -54,7 +54,8 @@ beta = 0.01
 def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, logger):
     ale = ALEInterface()
     ale.setInt(b'random_seed', 23*num + 153)
-#    ale.setBool(b'display_screen', True)
+    if num == 0:
+      ale.setBool(b'display_screen', True)
     ale.loadROM(str.encode("/homes/tk1713/space_invaders.bin"))
     legal_actions = ale.getMinimalActionSet()
     t = 1
@@ -76,7 +77,8 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
         while (not ale.game_over()) and t - t_start < t_max:
 #           action = random_action(legal_actions) #TODO used pi for this
            policy_probabilities, value = model(st)
-           action = policy_probabilities.multinomial().data[0,0]
+           policy_probabilities = policy_probabilities.view(-1)
+           action = policy_probabilities.multinomial().data[0]
            st, r, r_full = performAction(ale, action)
            rs += [(r, policy_probabilities, action, st, value) ]
            t, T.value = t + 1, T.value + 1
@@ -88,7 +90,7 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
             V_si = V_si.view(1)
             #import pdb; pdb.set_trace()
             entropy = -1 * torch.sum(torch.log(pi_i) * pi_i)
-            pi_loss = torch.log(pi_i[0,ai]) * (float(R) - V_si) - beta*entropy
+            pi_loss = torch.log(pi_i[ai]) * (float(R) - V_si) - beta*entropy
             V_loss = torch.pow(float(R) - V_si,2)
             total_loss = pi_loss + V_loss
             total_loss.backward()
@@ -119,6 +121,7 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
 
 learning_rate = 1e-3
 weight_decay = 0.99
+weight_decay = 0.01
 
 def master_thread(gradient_queue, log_queue, logger):
   num_legal_actions = 6 #need to manually change this
