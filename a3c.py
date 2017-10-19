@@ -7,7 +7,7 @@ import scipy.misc
 from random import randrange
 import random
 from datetime import datetime
-from torch.multiprocessing import Process, Pool, Value, Queue
+from torch.multiprocessing import Process, Pool, Value, Queue, SimpleQueue
 from a3c_model import get_model
 import torch
 from torch.autograd import Variable
@@ -44,16 +44,17 @@ def performAction(ale, action):
 def random_action(legal_actions):
   return  legal_actions[randrange(len(legal_actions))]
 
-T_max = 10000
-t_max = 10
+T_max = 10000000
+t_max = 5
 T = Value('i',1)
 gamma = 0.99
+beta = 0.99
  
 
 def play_game(num, shared_models, gradient_queue,  log_queue):
     ale = ALEInterface()
-    ale.setInt(b'random_seed', 123)
-    ale.setBool(b'display_screen', True)
+    ale.setInt(b'random_seed', 23*num + 153)
+#    ale.setBool(b'display_screen', True)
     ale.loadROM(str.encode("/homes/tk1713/space_invaders.bin"))
     legal_actions = ale.getMinimalActionSet()
     t = 1
@@ -89,7 +90,8 @@ def play_game(num, shared_models, gradient_queue,  log_queue):
             R = ri + gamma*R
             V_si = V(si).view(1)
             #import pdb; pdb.set_trace()
-            pi_loss = torch.log(pi_i[0,ai] * (float(R) - V_si))
+            entropy = torch.sum(torch.log(pi_i) * pi_i)
+            pi_loss = torch.log(pi_i[0,ai]) * (float(R) - V_si) - beta*entropy
             V_loss = torch.pow(float(R) - V_si,2)
             pi_loss.backward(retain_graph=True)
             V_loss.backward()
@@ -116,7 +118,8 @@ def play_game(num, shared_models, gradient_queue,  log_queue):
          action = random_action(legal_actions)
          ale.act(action)
 
-learning_rate = 1e-6
+learning_rate = 1e-3
+weight_decay = 0.99
 
 def master_thread(gradient_queue, log_queue):
   num_legal_actions = 6 #need to manually change this
@@ -124,9 +127,9 @@ def master_thread(gradient_queue, log_queue):
   pi.share_memory()
   V.share_memory()
   shared_model_state = (pi.state_dict(), V.state_dict())
-  pi_optimizer = torch.optim.RMSprop(pi.parameters(), lr=learning_rate)
-  V_optimizer = torch.optim.RMSprop([p for name, p in V.named_parameters() if name.startswith('1.')], lr=learning_rate)
-  proc_num = 4
+  pi_optimizer = torch.optim.RMSprop(pi.parameters(), lr=learning_rate, weight_decay=weight_decay)
+  V_optimizer = torch.optim.RMSprop([p for name, p in V.named_parameters() if name.startswith('1.')], lr=learning_rate, weight_decay=weight_decay)
+  proc_num = 7
 #  with Pool(proc_num) as p:
 #_    p.map_async(play_game, [(i, shared_model_state, gradient_queue) for i in range(proc_num)])
   procs = [Process(target=play_game, args=(i, shared_model_state, gradient_queue, log_queue)) for i in range(proc_num)]
@@ -155,8 +158,8 @@ def logger_thread(log_queue):
       writer.add_scalar(name, value, global_step=step)
 
 
-gradient_queue = Queue()
-log_queue = Queue()
+gradient_queue = SimpleQueue()
+log_queue = SimpleQueue()
 
 if __name__ == '__main__':
   log_proc = Process(target=logger_thread, args=(log_queue,))
