@@ -4,6 +4,7 @@ from ale_python_interface import ALEInterface
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
+import logging
 
 dtype = torch.FloatTensor
 
@@ -18,7 +19,7 @@ def get_example():
 
 
 class A3CModel(torch.nn.Module):
-  def __init__(self):
+  def __init__(self, num_actions):
     super(A3CModel, self).__init__()
     self.convLayers =  torch.nn.Sequential(
                         torch.nn.Conv2d(4, 16,8, stride=4),
@@ -27,31 +28,28 @@ class A3CModel(torch.nn.Module):
                         torch.nn.ReLU()
                        )
     self.linearLayer = torch.nn.Linear(2592,256)
+    self.policyLinearLayer = torch.nn.Linear(256, num_actions)
+    self.valueLinearLayer = torch.nn.Linear(256,1)
+    self.softmax = torch.nn.Softmax()
   def forward(self, x):
     out_conv = self.convLayers(x)
     out_conv = out_conv.view(out_conv.size(0), -1)
     out = self.linearLayer(out_conv).clamp(min=0)
-    return out
+    policy = self.policyLinearLayer(out)
+    policy = self.softmax(policy)
+    value = self.valueLinearLayer(out)
+    return policy, value
 
-class PolicyModel(torch.nn.Module):
-  def __init__(self, common_model, num_actions):
-    super(PolicyModel, self).__init__()
-    self.common_model = common_model
-    self.linearLayer = torch.nn.Linear(256, num_actions)
-    self.softmax = torch.nn.Softmax()
-  def forward(self, x):
-    out = self.common_model(x)
-    out = self.linearLayer(out)
-    out = self.softmax(out)
-    return out
-
-
-def get_model(num_actions):
-  common_model = A3CModel()
-  policy = PolicyModel(common_model, num_actions)
-  value = torch.nn.Sequential(common_model, torch.nn.Linear(256,1))
-  return policy, value
-
-
-
+def loggerConfig():
+    logger = logging.getLogger()
+    #formatter = logging.Formatter( '%(asctime)s %(levelname)-2s %(message)s')
+    formatter = logging.Formatter( '%(message)s')
+    streamhandler_ = logging.StreamHandler()
+    streamhandler_.setFormatter(formatter)
+    logger.addHandler(streamhandler_)
+#    fileHandler_ = logging.FileHandler("log/a3c_training_log_"+ts)
+#    fileHandler_.setFormatter(formatter)
+#    logger.addHandler(fileHandler_)
+    logger.setLevel(logging.INFO)
+    return logger
 #example = Variable(torch.from_numpy(get_example()).type(dtype))

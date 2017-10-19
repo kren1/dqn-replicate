@@ -7,8 +7,8 @@ import scipy.misc
 from random import randrange
 import random
 from datetime import datetime
-from torch.multiprocessing import Process, Pool, Value, Queue, SimpleQueue
-from a3c_model import get_model
+from torch.multiprocessing import Process, Pool, Value, Queue, SimpleQueue, Lock
+from a3c_model import A3CModel, loggerConfig
 import torch
 from torch.autograd import Variable
 from tensorboardX import SummaryWriter
@@ -51,7 +51,7 @@ gamma = 0.99
 beta = 0.99
  
 
-def play_game(num, shared_models, gradient_queue,  log_queue):
+def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, logger):
     ale = ALEInterface()
     ale.setInt(b'random_seed', 23*num + 153)
 #    ale.setBool(b'display_screen', True)
@@ -60,52 +60,48 @@ def play_game(num, shared_models, gradient_queue,  log_queue):
     t = 1
     T.value += 1 #Not synchornized, but doesn't really matter 
 
-    pi, V = get_model(len(legal_actions))
-    pi_shared, V_shared = shared_models
+    model = A3CModel(len(legal_actions))
 
     [ale.act(0) for i in range(131)] #skip start of the game
     st, r, r_full = performAction(ale, 0)
     total_game_reward = 0
     while T.value < T_max:
-        pi.zero_grad()
-        V.zero_grad()
+        model.zero_grad()
         #synchronize network params
-        pi.load_state_dict(pi_shared)
-        V.load_state_dict(V_shared)
-        print(num, "Updated parameters", next(pi.parameters()).data[0,0,0,0])
+        with parameters_lock:
+          model.load_state_dict(shared_model)
+        logger.debug("%d Updated parameters %e", num,  next(model.parameters()).data[0,0,0,0])
         t_start = t
         rs = []
         while (not ale.game_over()) and t - t_start < t_max:
 #           action = random_action(legal_actions) #TODO used pi for this
-           policy_probabilities = pi(st)
+           policy_probabilities, value = model(st)
            np_pi = policy_probabilities.data.numpy()[0]
            action = np.random.choice(len(legal_actions), p=np_pi)
            st, r, r_full = performAction(ale, action)
-           rs += [(r, policy_probabilities, action, st) ]
+           rs += [(r, policy_probabilities, action, st, value) ]
            t, T.value = t + 1, T.value + 1
            total_game_reward += r_full
-        R = 0 if ale.game_over() else V(st).data.numpy().flatten()[0]
-        print(num, "Used parameters", next(pi.parameters()).data[0,0,0,0])
-        for ri, pi_i, ai, si in rs:
+        R = 0 if ale.game_over() else value.data.numpy().flatten()[0]
+        logger.debug("%d Used parameters %e", num,next(model.parameters()).data[0,0,0,0])
+        for ri, pi_i, ai, si, V_si in rs:
             R = ri + gamma*R
-            V_si = V(si).view(1)
+            V_si = V_si.view(1)
             #import pdb; pdb.set_trace()
             entropy = torch.sum(torch.log(pi_i) * pi_i)
             pi_loss = torch.log(pi_i[0,ai]) * (float(R) - V_si) - beta*entropy
             V_loss = torch.pow(float(R) - V_si,2)
-            pi_loss.backward(retain_graph=True)
-            V_loss.backward()
-            #Acc grad
+            total_loss = pi_loss + V_loss
+            total_loss.backward()
         #Update global grad
-        pi_grads = [pi_params.grad for pi_params in pi.parameters()]
-        V_grads = [V_params.grad for name, V_params in V.named_parameters() if name.startswith('1.')]
-#        print(num, "Sending gradients")
-        gradient_queue.put((pi_grads, V_grads))
+        torch.nn.utils.clip_grad_norm(model.parameters(),40)
+        grads = [params.grad for params in model.parameters()]
+        gradient_queue.put(grads)
 
         if ale.game_over():
             ale.reset_game()
             rs = []
-            print(num, "     GAME OVER     ", total_game_reward)
+            logger.warning("%d     GAME OVER     %d",num, total_game_reward)
             log_queue.put(("workers/totalReward", T.value, total_game_reward))
             log_queue.put(("worker/{}/totalReward".format(num), T.value, total_game_reward))
             total_game_reward = 0
@@ -121,32 +117,26 @@ def play_game(num, shared_models, gradient_queue,  log_queue):
 learning_rate = 1e-3
 weight_decay = 0.99
 
-def master_thread(gradient_queue, log_queue):
+def master_thread(gradient_queue, log_queue, logger):
   num_legal_actions = 6 #need to manually change this
-  pi, V = get_model(num_legal_actions)
-  pi.share_memory()
-  V.share_memory()
-  shared_model_state = (pi.state_dict(), V.state_dict())
-  pi_optimizer = torch.optim.RMSprop(pi.parameters(), lr=learning_rate, weight_decay=weight_decay)
-  V_optimizer = torch.optim.RMSprop([p for name, p in V.named_parameters() if name.startswith('1.')], lr=learning_rate, weight_decay=weight_decay)
-  proc_num = 7
-#  with Pool(proc_num) as p:
-#_    p.map_async(play_game, [(i, shared_model_state, gradient_queue) for i in range(proc_num)])
-  procs = [Process(target=play_game, args=(i, shared_model_state, gradient_queue, log_queue)) for i in range(proc_num)]
+  parameters_lock = Lock()
+  shared_model = A3CModel(num_legal_actions)
+  shared_model.share_memory()
+  shared_model_state = shared_model.state_dict()
+  optimizer = torch.optim.RMSprop(shared_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+  proc_num = 8
+  procs = [Process(target=play_game, args=(i, shared_model_state, gradient_queue, log_queue, parameters_lock, logger)) for i in range(proc_num)]
   list(map(lambda p: p.start(), procs))
-  print("spawned processes")
+  logger.info("spawned processes")
   while T.value < T_max:
-      print("Waiting for gradients, current parameter", next(pi.parameters()).data[0,0,0,0])
-      pi_grads, V_grads = gradient_queue.get()
-      print("Updating pi grads", pi_grads[0].data[0,0,0,0], "========" if pi_grads[0].data[0,0,0,0] != 0.0 else "")
-      for pi_g, (name, pi_param) in zip(pi_grads, pi.named_parameters()):
-          #pi_param.data += learning_rate * pi_g.data
-          pi_param.grad = pi_g
-          log_queue.put(('master/gradients/{}'.format(name), T.value, pi_g.norm().data[0]))
-      pi_optimizer.step()
-      for V_g, V_param in zip(V_grads, [p for name, p in V.named_parameters() if name.startswith('1.')]):
-          V_param.grad =  V_g
-      V_optimizer.step()
+      logger.info("Waiting for gradients, current parameter %e", next(shared_model.parameters()).data[0,0,0,0])
+      grads = gradient_queue.get()
+      logger.info("Updating grads %e %s", grads[0].data[0,0,0,0], "========" if grads[0].data[0,0,0,0] != 0.0 else "")
+      for gradients, (name, params) in zip(grads, shared_model.named_parameters()):
+          params.grad = gradients
+          #log_queue.put(('master/gradients/{}'.format(name), T.value, gradients.norm().data[0]))
+      with parameters_lock:
+        optimizer.step()
 
   
 def logger_thread(log_queue):
@@ -164,7 +154,7 @@ log_queue = SimpleQueue()
 if __name__ == '__main__':
   log_proc = Process(target=logger_thread, args=(log_queue,))
   log_proc.start()
-  master_thread(gradient_queue, log_queue)
+  master_thread(gradient_queue, log_queue, loggerConfig())
   #play_game(0)
 
 #code.interact(local=locals())
