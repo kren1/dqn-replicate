@@ -48,7 +48,7 @@ T_max = 10000000
 t_max = 5
 T = Value('i',1)
 gamma = 0.99
-beta = 0.99
+beta = 0.01
  
 
 def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, logger):
@@ -76,8 +76,7 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
         while (not ale.game_over()) and t - t_start < t_max:
 #           action = random_action(legal_actions) #TODO used pi for this
            policy_probabilities, value = model(st)
-           np_pi = policy_probabilities.data.numpy()[0]
-           action = np.random.choice(len(legal_actions), p=np_pi)
+           action = policy_probabilities.multinomial().data[0,0]
            st, r, r_full = performAction(ale, action)
            rs += [(r, policy_probabilities, action, st, value) ]
            t, T.value = t + 1, T.value + 1
@@ -88,11 +87,15 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
             R = ri + gamma*R
             V_si = V_si.view(1)
             #import pdb; pdb.set_trace()
-            entropy = torch.sum(torch.log(pi_i) * pi_i)
+            entropy = -1 * torch.sum(torch.log(pi_i) * pi_i)
             pi_loss = torch.log(pi_i[0,ai]) * (float(R) - V_si) - beta*entropy
             V_loss = torch.pow(float(R) - V_si,2)
             total_loss = pi_loss + V_loss
             total_loss.backward()
+        log_queue.put(("loss/policy", T.value,pi_loss.data[0]))
+        log_queue.put(("loss/value", T.value, V_loss.data[0]))
+        log_queue.put(("loss/entropy", T.value, entropy.data[0]))
+        log_queue.put(("value", T.value, V_si.data[0]))
         #Update global grad
         torch.nn.utils.clip_grad_norm(model.parameters(),40)
         grads = [params.grad for params in model.parameters()]
