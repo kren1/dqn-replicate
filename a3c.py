@@ -26,6 +26,7 @@ def performAction(ale, action):
   screenshot = []
   legal_actions = ale.getMinimalActionSet()
   lives_before = ale.lives()
+  action = legal_actions[action]
   for i in range(1,5):
     reward += [ale.act(action)] 
     reward += [ale.act(action)] 
@@ -37,7 +38,7 @@ def performAction(ale, action):
 #  saveScreenShot(screenshot)
 #  print(reward)
   if lives_before > ale.lives():
-    return screenshot, -10, sum(reward)
+    return screenshot, -20, sum(reward)
 
   return screenshot, np.sign(sum(reward)), sum(reward)
 
@@ -63,6 +64,7 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
 
     model = A3CModel(len(legal_actions))
 
+
     [ale.act(0) for i in range(131)] #skip start of the game
     st, r, r_full = performAction(ale, 0)
     total_game_reward = 0
@@ -79,6 +81,7 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
            policy_probabilities, value = model(st)
            policy_probabilities = policy_probabilities.view(-1)
            action = policy_probabilities.multinomial().data[0]
+
            st, r, r_full = performAction(ale, action)
            rs += [(r, policy_probabilities, action, st, value) ]
            t, T.value = t + 1, T.value + 1
@@ -92,7 +95,7 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
             entropy = -1 * torch.sum(torch.log(pi_i) * pi_i)
             pi_loss = torch.log(pi_i[ai]) * (float(R) - V_si) - beta*entropy
             V_loss = torch.pow(float(R) - V_si,2)
-            total_loss = pi_loss + V_loss
+            total_loss = pi_loss + 0.5*V_loss
             total_loss.backward()
         log_queue.put(("loss/policy", T.value,pi_loss.data[0]))
         log_queue.put(("loss/value", T.value, V_loss.data[0]))
@@ -108,6 +111,7 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
             rs = []
             logger.warning("%d     GAME OVER     %d",num, total_game_reward)
             log_queue.put(("workers/totalReward", T.value, total_game_reward))
+            log_queue.put(("workers/gameTime", T.value, t - t_start))
             log_queue.put(("worker/{}/totalReward".format(num), T.value, total_game_reward))
             total_game_reward = 0
             [ale.act(0) for i in range(131)] #skip start of the game
@@ -121,7 +125,6 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
 
 learning_rate = 1e-3
 weight_decay = 0.99
-weight_decay = 0.01
 
 def master_thread(gradient_queue, log_queue, logger):
   num_legal_actions = 6 #need to manually change this
