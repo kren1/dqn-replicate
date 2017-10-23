@@ -27,7 +27,7 @@ def performAction(ale, action):
   legal_actions = ale.getMinimalActionSet()
   lives_before = ale.lives()
   action = legal_actions[action]
-  for i in range(1,5):
+  for i in range(1,2):
     reward += [ale.act(action)] 
     reward += [ale.act(action)] 
     reward += [ale.act(action)] 
@@ -38,7 +38,7 @@ def performAction(ale, action):
 #  saveScreenShot(screenshot)
 #  print(reward)
   if lives_before > ale.lives():
-    return screenshot, -20, sum(reward)
+    return screenshot, -2, sum(reward)
 
   return screenshot, np.sign(sum(reward)), sum(reward)
 
@@ -111,9 +111,9 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
             rs = []
             logger.warning("%d     GAME OVER     %d",num, total_game_reward)
             log_queue.put(("workers/totalReward", T.value, total_game_reward))
-            log_queue.put(("workers/gameTime", T.value, t - t_start))
-            log_queue.put(("worker/{}/totalReward".format(num), T.value, total_game_reward))
+            log_queue.put(("workers/gameTime", T.value, t))
             total_game_reward = 0
+            t = 0
             [ale.act(0) for i in range(131)] #skip start of the game
             st, r, r_full = performAction(ale, 0)
 

@@ -1,10 +1,10 @@
 import torch
-#from a3c import performAction
 from ale_python_interface import ALEInterface
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
 import logging
+
 
 dtype = torch.FloatTensor
 
@@ -22,7 +22,7 @@ class A3CModel(torch.nn.Module):
   def __init__(self, num_actions):
     super(A3CModel, self).__init__()
     self.convLayers =  torch.nn.Sequential(
-                        torch.nn.Conv2d(4, 16,8, stride=4),
+                        torch.nn.Conv2d(1, 16,8, stride=4),
                         torch.nn.ReLU(),
                         torch.nn.Conv2d(16, 32,4, stride=2),
                         torch.nn.ReLU()
@@ -36,7 +36,7 @@ class A3CModel(torch.nn.Module):
     out_conv = out_conv.view(out_conv.size(0), -1)
     out = self.linearLayer(out_conv).clamp(min=0)
     policy = self.policyLinearLayer(out)
-    policy = self.softmax(policy)
+    policy = F.softmax(policy.view(-1))
     value = self.valueLinearLayer(out)
     return policy, value
 

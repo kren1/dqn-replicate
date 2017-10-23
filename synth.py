@@ -32,7 +32,7 @@ def find(vector):
 class NNExpr:
   def __init__(self, expression, window_size=8):
     expression = expression.replace(" ","")
-    self.size = len(expression) 
+    self.size = max(len(expression), window_size)
     self.window_left = 0
     self.window_right = window_size
     self.cursor_pos = 0
@@ -82,10 +82,12 @@ class NNExpr:
     self.size += 6
   def __str__(self):
     return "".join(list(map(lambda a: digitMap[find(a[1:])], self.arr)))
+  def get_windowed_state(self):
+    return self.arr[self.window_left:self.window_right]
   def print(self):
     line1 = ""  
     line2 = ""  
-    for vector in self.arr[self.window_left:self.window_right]:
+    for vector in self.get_windowed_state(): 
       line1 += digitMap[find(vector[1:])] + " "
       line2 += "^ " if vector[0] == 1 else "  " 
     return line1 + '\n' + line2
@@ -118,7 +120,8 @@ class Harness:
        2: nnexpr.replace,
        3: nnexpr.panLeft,
        4: nnexpr.panRight,
-       5: nnexpr.insert
+       5: nnexpr.insert,
+       6: nnexpr.evalExpr
      }
     self.initial_expr = str(nnexpr)
     self.initial_value = nnexpr.evalExpr()
@@ -134,11 +137,34 @@ class Harness:
       return -1 #Wrong value
     return distance.levenshtein(self.initial_expr, str(self.nnexpr))
       
+from random import randrange, choice
+class SynthGame:
+  def __init__(self):
+    self.reset()
+  def reset(self):
+    expr = str(randrange(1,9))
+    for i in range(10):
+       if i % 2 == 0:
+           expr += choice (["+", "-"])
+       elif i % 2 == 1:
+           expr += str(randrange(1,9))
+    self.nnexpr = NNExpr(expr)
+    self.harness = Harness(self.nnexpr)
+    self.over = False
+  def act(self, action):
+    over = False
+    if action == 6:
+        over = True
+    reward = self.harness.act(action)
+    state = self.nnexpr.get_windowed_state()
+    return reward, state, over
 
 
 
+    
 
-import curses
+
+
 def main(stdscr):
   e = NNExpr("1+1+1-2+1")
   stdscr.addstr(0,0,"Press q to quit")
@@ -170,4 +196,5 @@ def main(stdscr):
 
 
 if __name__ == '__main__':
+   import curses
    curses.wrapper(main)
