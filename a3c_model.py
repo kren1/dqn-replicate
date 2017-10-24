@@ -17,6 +17,26 @@ def get_example():
     st, r, total_r = performAction(ale, 0)
     return np.array([np.swapaxes(st,0,2)])
 
+class SynthA3CModel(torch.nn.Module):
+  def __init__(self, num_actions):
+    super(SynthA3CModel, self).__init__()
+    self.convLayers =  torch.nn.Sequential(
+                        torch.nn.Linear(112, 256),
+                        torch.nn.ReLU(),
+                       )
+    self.linearLayer = torch.nn.Linear(2592,256)
+    self.policyLinearLayer = torch.nn.Linear(256, num_actions)
+    self.valueLinearLayer = torch.nn.Linear(256,1)
+    self.softmax = torch.nn.Softmax()
+  def forward(self, x):
+    out_conv = self.convLayers(x.view(-1))
+   # out_conv = out_conv.view(out_conv.size(0), -1)
+   # out = self.linearLayer(out_conv).clamp(min=0)
+    out = out_conv
+    policy = self.policyLinearLayer(out)
+    policy = F.softmax(policy.view(-1))
+    value = self.valueLinearLayer(out)
+    return policy, value
 
 class A3CModel(torch.nn.Module):
   def __init__(self, num_actions):

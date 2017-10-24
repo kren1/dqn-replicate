@@ -8,44 +8,17 @@ from random import randrange
 import random
 from datetime import datetime
 from torch.multiprocessing import Process, Pool, Value, Queue, SimpleQueue, Lock
-from a3c_model import A3CModel, loggerConfig
+from a3c_model import A3CModel, loggerConfig, SynthA3CModel
 import torch
 from torch.autograd import Variable
 from tensorboardX import SummaryWriter
 from datetime import datetime
+from synth import SynthGame
+import distance
 
 dtype = torch.FloatTensor
 
-def saveScreenShot(screenshot):
-    for i in range(len(screenshot)):
-      im = Image.fromarray(screenshot[:,:,i])
-      im.save("file" + str(i) + ".jpg")
-
-def performAction(ale, action):
-  reward = []
-  screenshot = []
-  legal_actions = ale.getMinimalActionSet()
-  lives_before = ale.lives()
-  action = legal_actions[action]
-  for i in range(1,2):
-    reward += [ale.act(action)] 
-    reward += [ale.act(action)] 
-    reward += [ale.act(action)] 
-    #screenshot += [ale.getScreenGrayscale()]
-    screenshot += [scipy.misc.imresize(ale.getScreenGrayscale()[:,:,0], (110,84))[18:102,:]]
-  screenshot = Variable(torch.from_numpy(np.array([np.array(screenshot).swapaxes(0,2).swapaxes(0,1).swapaxes(0,2)])).type(dtype))
-#  print(screenshot.shape)
-#  saveScreenShot(screenshot)
-#  print(reward)
-  if lives_before > ale.lives():
-    return screenshot, -2, sum(reward)
-
-  return screenshot, np.sign(sum(reward)), sum(reward)
-
-def random_action(legal_actions):
-  return  legal_actions[randrange(len(legal_actions))]
-
-T_max = 10000000
+T_max = 100000
 t_max = 5
 T = Value('i',1)
 gamma = 0.99
@@ -53,41 +26,40 @@ beta = 0.01
  
 
 def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, logger):
-    ale = ALEInterface()
-    ale.setInt(b'random_seed', 23*num + 153)
-    if num == 0:
-      ale.setBool(b'display_screen', True)
-    ale.loadROM(str.encode("/homes/tk1713/space_invaders.bin"))
-    legal_actions = ale.getMinimalActionSet()
+    legal_actions = list(range(7))
+    game = SynthGame()
     t = 1
     T.value += 1 #Not synchornized, but doesn't really matter 
 
-    model = A3CModel(len(legal_actions))
+    model = SynthA3CModel(len(legal_actions))
 
 
-    [ale.act(0) for i in range(131)] #skip start of the game
-    st, r, r_full = performAction(ale, 0)
-    total_game_reward = 0
+    st = game.nnexpr.get_windowed_state()
+    over = False
+    total_reward = 0
+    action_log = []
     while T.value < T_max:
         model.zero_grad()
         #synchronize network params
         with parameters_lock:
           model.load_state_dict(shared_model)
-        logger.debug("%d Updated parameters %e", num,  next(model.parameters()).data[0,0,0,0])
+        logger.debug("%d Updated parameters %e", num,  next(model.parameters()).data.view(-1)[0])
         t_start = t
         rs = []
-        while (not ale.game_over()) and t - t_start < t_max:
+        while (not over) and t - t_start < t_max:
 #           action = random_action(legal_actions) #TODO used pi for this
+           st = Variable(torch.from_numpy(st).type(dtype))
            policy_probabilities, value = model(st)
            policy_probabilities = policy_probabilities.view(-1)
            action = policy_probabilities.multinomial().data[0]
 
-           st, r, r_full = performAction(ale, action)
+           st, r, over = game.act(action)
+           action_log += [(r, action)]
+           total_reward += r
            rs += [(r, policy_probabilities, action, st, value) ]
            t, T.value = t + 1, T.value + 1
-           total_game_reward += r_full
-        R = 0 if ale.game_over() else value.data.numpy().flatten()[0]
-        logger.debug("%d Used parameters %e", num,next(model.parameters()).data[0,0,0,0])
+        R = 0 if over else value.data.numpy().flatten()[0]
+        logger.debug("%d Used parameters %e", num,next(model.parameters()).data.view(-1)[0])
         for ri, pi_i, ai, si, V_si in rs:
             R = ri + gamma*R
             V_si = V_si.view(1)
@@ -106,50 +78,53 @@ def play_game(num, shared_model, gradient_queue,  log_queue, parameters_lock, lo
         grads = [params.grad for params in model.parameters()]
         gradient_queue.put(grads)
 
-        if ale.game_over():
-            ale.reset_game()
+        if over:
+            over = False
             rs = []
-            logger.warning("%d     GAME OVER     %d",num, total_game_reward)
-            log_queue.put(("workers/totalReward", T.value, total_game_reward))
+            logger.warning("%d     GAME OVER     %.4f",num, total_reward)
+            if total_reward > 0.0:
+              logger.warning("n: %s = %d; %d\ni: %s = %d; %d",
+                 str(game.nnexpr), game.nnexpr.evalExpr(),len(str(game.nnexpr)), 
+                 game.harness.initial_expr, game.harness.initial_value, len(game.harness.initial_expr))
+              logger.warning(str(action_log))
+            log_queue.put(("workers/totalReward", T.value,  total_reward))
             log_queue.put(("workers/gameTime", T.value, t))
-            total_game_reward = 0
+            game.reset()
+            action_log = []
             t = 0
-            [ale.act(0) for i in range(131)] #skip start of the game
-            st, r, r_full = performAction(ale, 0)
+            total_reward = 0
+            st = game.nnexpr.get_windowed_state()
 
-
-    for E in range(100):
-      while not ale.game_over():
-         action = random_action(legal_actions)
-         ale.act(action)
 
 learning_rate = 1e-3
 weight_decay = 0.99
 
 def master_thread(gradient_queue, log_queue, logger):
-  num_legal_actions = 6 #need to manually change this
+  num_legal_actions = 7 #need to manually change this
   parameters_lock = Lock()
-  shared_model = A3CModel(num_legal_actions)
+  shared_model = SynthA3CModel(num_legal_actions)
   shared_model.share_memory()
   shared_model_state = shared_model.state_dict()
   optimizer = torch.optim.RMSprop(shared_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-  proc_num = 8
+  proc_num = 3
   procs = [Process(target=play_game, args=(i, shared_model_state, gradient_queue, log_queue, parameters_lock, logger)) for i in range(proc_num)]
   list(map(lambda p: p.start(), procs))
   logger.info("spawned processes")
   while T.value < T_max:
-      logger.info("Waiting for gradients, current parameter %e", next(shared_model.parameters()).data[0,0,0,0])
+      logger.debug("Waiting for gradients, current parameter %e", next(shared_model.parameters()).data.view(-1)[0])
       grads = gradient_queue.get()
-      logger.info("Updating grads %e %s", grads[0].data[0,0,0,0], "========" if grads[0].data[0,0,0,0] != 0.0 else "")
+      if T.value % 25 == 0:
+        logger.warning("Updating grads %e %s", grads[0].data.view(-1)[0], "========" if grads[0].data.view(-1)[0] != 0.0 else "")
       for gradients, (name, params) in zip(grads, shared_model.named_parameters()):
           params.grad = gradients
           #log_queue.put(('master/gradients/{}'.format(name), T.value, gradients.norm().data[0]))
       with parameters_lock:
         optimizer.step()
+  import pdb; pdb.set_trace()
 
   
 def logger_thread(log_queue):
-  log_dir = '/tmp/runs/{}'.format(str(datetime.now())[5:16])
+  log_dir = '/tmp/runs/synth-{}'.format(str(datetime.now())[5:16])
   print(log_dir)
   writer = SummaryWriter(log_dir=log_dir)
   while T.value < T_max:
@@ -166,4 +141,4 @@ if __name__ == '__main__':
   master_thread(gradient_queue, log_queue, loggerConfig())
   #play_game(0)
 
-#code.interact(local=locals())
+code.interact(local=locals())

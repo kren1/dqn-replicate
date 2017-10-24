@@ -2,6 +2,7 @@
 import numpy as np
 from random import choice
 import distance
+import math
 #Representation charcahter -> index of one hot vector
 # digits 1-9 -> 0-8
 # + -> 9 
@@ -32,6 +33,7 @@ def find(vector):
 class NNExpr:
   def __init__(self, expression, window_size=8):
     expression = expression.replace(" ","")
+    self.window_size = window_size
     self.size = max(len(expression), window_size)
     self.window_left = 0
     self.window_right = window_size
@@ -68,6 +70,8 @@ class NNExpr:
    self.window_right += pan_diff
    self.window_left += pan_diff
   def insert(self):
+    if self.size > 4 * self.window_size:
+        return
     cursor_pos = find(self.arr[:,0])
     new_arr = np.zeros((self.size + 6, 14))
     new_arr[:cursor_pos, :] = self.arr[:cursor_pos, :]
@@ -126,16 +130,23 @@ class Harness:
     self.initial_expr = str(nnexpr)
     self.initial_value = nnexpr.evalExpr()
   def act(self, action, equal=True):
-    self.actions[action]()
     try:
+      self.actions[action]()
       value = self.nnexpr.evalExpr()
     except SyntaxError:
       return -1 #Failed to compile
     except TypeError:
       return -1 # eg. expression (1+1)(1+)
-    if equal and value != self.initial_value:
-      return -1 #Wrong value
-    return distance.levenshtein(self.initial_expr, str(self.nnexpr))
+    #if equal and value != self.initial_value:
+    #Wrong value
+    diff = abs( value - self.initial_value)
+    wrong_value_penalty = math.tanh(diff)
+    dist = distance.levenshtein(self.initial_expr, str(self.nnexpr))
+    max_dist = self.nnexpr.size
+    #print("diff {}; penatly {}, dist: {}, max_dist {}, return {}".format(diff, wrong_value_penalty, dist, max_dist, dist/max_dist - wrong_value_penalty))
+    bonus = 1 if dist > 0 and value == self.initial_value else 0
+
+    return dist/max_dist - wrong_value_penalty + bonus
       
 from random import randrange, choice
 class SynthGame:
@@ -151,13 +162,17 @@ class SynthGame:
     self.nnexpr = NNExpr(expr)
     self.harness = Harness(self.nnexpr)
     self.over = False
+    self.prev_reward = 0
   def act(self, action):
     over = False
     if action == 6:
         over = True
-    reward = self.harness.act(action)
+    r = self.harness.act(action)
+    over = over if r > -1 else True
+    reward = r - self.prev_reward
+    self.prev_reward = r
     state = self.nnexpr.get_windowed_state()
-    return reward, state, over
+    return state, reward, over
 
 
 
